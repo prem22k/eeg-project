@@ -151,10 +151,10 @@ def _read_session_epochs(path_part, channels):
         raw = mne.io.read_raw_bdf(bdf_file, preload=True, verbose='ERROR')
         if channels:
             raw.pick(channels)
-        # Keep the classic 4.5s trial window, then reuse existing interval slicing.
         events, event_id = mne.events_from_annotations(raw, verbose='ERROR')
         if len(events) == 0:
             raise ValueError(f'No annotation events found in {bdf_file}')
+
         epochs = mne.Epochs(
             raw,
             events=events,

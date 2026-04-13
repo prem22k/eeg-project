@@ -151,6 +151,52 @@ assert len(dp._CONDITION_MAP) == 3, "Expected 3 conditions"
 assert len(dp._DIRECTION_MAP) == 4, "Expected 4 directions"
 print("✓ Mapping sizes are correct (3 conditions, 4 directions)")
 
+# Regression test: BDF sessions without recoverable annotations must fail clearly
+print("\n=== Testing BDF Fallback Handling ===")
+original_exists = dp.os.path.exists
+original_read_raw_bdf = dp.mne.io.read_raw_bdf
+original_events_from_annotations = dp.mne.events_from_annotations
+original_epochs = dp.mne.Epochs
+
+class _FakeRaw:
+    def pick(self, channels):
+        return self
+
+def _fake_exists(path):
+    return path.endswith('_eeg.bdf')
+
+def _fake_read_raw_bdf(*args, **kwargs):
+    return _FakeRaw()
+
+def _fake_events_from_annotations(*args, **kwargs):
+    return np.empty((0, 3), dtype=int), {}
+
+def _fail_epochs(*args, **kwargs):
+    raise AssertionError('mne.Epochs should not be called when no BDF events exist')
+
+dp.os.path.exists = _fake_exists
+dp.mne.io.read_raw_bdf = _fake_read_raw_bdf
+dp.mne.events_from_annotations = _fake_events_from_annotations
+dp.mne.Epochs = _fail_epochs
+
+try:
+    try:
+        dp._read_session_epochs('/tmp/sub-01_ses-01', channels=None)
+        print('✗ BDF sessions without annotations were incorrectly accepted')
+        sys.exit(1)
+    except ValueError as e:
+        expected_message = 'No annotation events found in /tmp/sub-01_ses-01_eeg.bdf'
+        if str(e) == expected_message:
+            print('✓ BDF sessions without annotations fail clearly')
+        else:
+            print(f'✗ Unexpected BDF failure message: {e}')
+            sys.exit(1)
+finally:
+    dp.os.path.exists = original_exists
+    dp.mne.io.read_raw_bdf = original_read_raw_bdf
+    dp.mne.events_from_annotations = original_events_from_annotations
+    dp.mne.Epochs = original_epochs
+
 print("\n=== All Tests Passed ===")
 print("Modernized MNE preprocessing pipeline is functional!")
 print("\nTo run full training, ensure:")
