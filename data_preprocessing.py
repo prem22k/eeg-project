@@ -1,3 +1,6 @@
+import os
+import re
+
 import mne
 import numpy as np
 import tensorflow as tf
@@ -5,6 +8,174 @@ import sklearn
 from scipy import stats
 
 import utilities
+
+
+_CONDITION_MAP = {
+    'pronouncedspeech': 0,
+    'innerspeech': 1,
+    'visualizedcondition': 2,
+}
+
+_DIRECTION_MAP = {
+    'up': 0,
+    'down': 1,
+    'left': 2,
+    'right': 3,
+}
+
+
+def _normalize_label(label):
+    return re.sub(r'[^a-z0-9]', '', str(label).lower())
+
+
+def _extract_condition_and_direction(label):
+    normalized = _normalize_label(label)
+    condition = next((idx for key, idx in _CONDITION_MAP.items() if key in normalized), -1)
+    direction = next((idx for key, idx in _DIRECTION_MAP.items() if key in normalized), -1)
+    return condition, direction
+
+
+def _event_table_from_epochs(epochs):
+    """Build legacy-compatible event table [sample, direction, condition, id]."""
+    reverse_event_id = {code: description for description, code in epochs.event_id.items()}
+    events = np.zeros((len(epochs.events), 4), dtype=int)
+    for i, event in enumerate(epochs.events):
+        code = int(event[2])
+        description = reverse_event_id.get(code, str(code))
+        condition, direction = _extract_condition_and_direction(description)
+        if condition == -1 or direction == -1:
+            raise ValueError(
+                f"Failed to parse annotation label '{description}' at row {i}. "
+                f'Expected condition in {set(_CONDITION_MAP)} and direction in {set(_DIRECTION_MAP)}.'
+            )
+        events[i] = [int(event[0]), direction, condition, code]
+    return events
+
+
+def _load_events(path_part, epochs):
+    events_file = f'{path_part}_events.dat'
+    if os.path.exists(events_file):
+        loaded = np.load(events_file, allow_pickle=True)
+        loaded = np.asarray(loaded)
+        if loaded.size == 0:
+            raise ValueError(f'Event file is empty: {events_file}')
+        if loaded.ndim == 1:
+            loaded = loaded.reshape(-1, 1)
+        if loaded.shape[1] >= 4:
+            return loaded[:, :4].astype(int)
+        if loaded.shape[1] == 3:
+            padded = np.zeros((loaded.shape[0], 4), dtype=int)
+            padded[:, :3] = loaded.astype(int)
+            padded[:, 3] = loaded[:, 2].astype(int)
+            return padded
+        raise ValueError(f'Unsupported event table shape {loaded.shape} in {events_file}')
+    return _event_table_from_epochs(epochs)
+
+
+def _align_data_and_events(data, events, epoch_samples):
+    """Align EEG trials with legacy event rows by sample index (events[:, 0])."""
+    if data.shape[0] == events.shape[0] and np.array_equal(events[:, 0], epoch_samples):
+        return data, events
+
+    sample_to_event_indices = {}
+    for idx, sample in enumerate(events[:, 0]):
+        sample_to_event_indices.setdefault(int(sample), []).append(idx)
+
+    data_indices = []
+    event_indices = []
+    for data_idx, sample in enumerate(epoch_samples):
+        matches = sample_to_event_indices.get(int(sample), [])
+        if matches:
+            data_indices.append(data_idx)
+            event_indices.append(matches.pop(0))
+
+    if not data_indices:
+        raise ValueError('Could not align EEG trials with event rows by sample indices.')
+
+    if len(data_indices) != len(epoch_samples):
+        dropped = len(epoch_samples) - len(data_indices)
+        raise ValueError(
+            f'Alignment dropped {dropped} trials; refusing to continue with partial labels. '
+            f'Matched {len(data_indices)} of {len(epoch_samples)}.'
+        )
+
+    return data[data_indices], events[event_indices]
+
+
+def _validate_event_table(events):
+    valid_conditions = np.isin(events[:, 2], [0, 1, 2])
+    valid_directions = np.isin(events[:, 1], [0, 1, 2, 3])
+    if not np.all(valid_conditions):
+        invalid_indices = np.where(~valid_conditions)[0]
+        invalid_values = np.unique(events[invalid_indices, 2])
+        raise ValueError(
+            f'Invalid condition values {invalid_values.tolist()} at rows '
+            f'{invalid_indices[:10].tolist()}. Expected values in {{0, 1, 2}}.'
+        )
+    if not np.all(valid_directions):
+        invalid_indices = np.where(~valid_directions)[0]
+        invalid_values = np.unique(events[invalid_indices, 1])
+        raise ValueError(
+            f'Invalid direction values {invalid_values.tolist()} at rows '
+            f'{invalid_indices[:10].tolist()}. Expected values in {{0, 1, 2, 3}}.'
+        )
+
+
+def _read_session_epochs(path_part, channels):
+    epochs_file = f'{path_part}_eeg-epo.fif'
+    raw_file = f'{path_part}_eeg.fif'
+    bdf_file = f'{path_part}_eeg.bdf'
+
+    if os.path.exists(epochs_file):
+        epochs = mne.read_epochs(epochs_file, preload=True, verbose='ERROR')
+    elif os.path.exists(raw_file):
+        raw = mne.io.read_raw_fif(raw_file, preload=True, verbose='ERROR')
+        if channels:
+            raw.pick(channels)
+        # Keep the classic 4.5s trial window, then reuse existing interval slicing.
+        events, event_id = mne.events_from_annotations(raw, verbose='ERROR')
+        if len(events) == 0:
+            raise ValueError(f'No annotation events found in {raw_file}')
+        epochs = mne.Epochs(
+            raw,
+            events=events,
+            event_id=event_id,
+            tmin=0.0,
+            tmax=4.5,
+            baseline=None,
+            preload=True,
+            verbose='ERROR',
+        )
+    elif os.path.exists(bdf_file):
+        # Read BDF format (BioSemi Data Format)
+        raw = mne.io.read_raw_bdf(bdf_file, preload=True, verbose='ERROR')
+        if channels:
+            raw.pick(channels)
+        # Keep the classic 4.5s trial window, then reuse existing interval slicing.
+        events, event_id = mne.events_from_annotations(raw, verbose='ERROR')
+        if len(events) == 0:
+            raise ValueError(f'No annotation events found in {bdf_file}')
+        epochs = mne.Epochs(
+            raw,
+            events=events,
+            event_id=event_id,
+            tmin=0.0,
+            tmax=4.5,
+            baseline=None,
+            preload=True,
+            verbose='ERROR',
+        )
+    else:
+        raise FileNotFoundError(f'No EEG file found for session prefix: {path_part}')
+
+    if channels:
+        epochs.pick(channels)
+
+    data = epochs.get_data(copy=True)
+    events = _load_events(path_part, epochs)
+    data, events = _align_data_and_events(data, events, epochs.events[:, 0])
+    _validate_event_table(events)
+    return data, events
 
 
 def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./dataset'):
@@ -24,12 +195,9 @@ def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./d
     :return: eeg-data and event data in seperate arrays
     :rtype: tuple of two numpy arrays
     """
-    # initialize arrays to hold loaded data
-    #data_collection = np.empty((0, 128 if not channels else len(channels), 1153))
-    #events_collection = np.empty((0, 4), dtype=int)
     data_collection = []
     events_collection = []
-    # iterate through filestructure
+
     for sub in subjects:
         for ses in [1, 2, 3]:
             utilities.progress_bar(((sub-1)*3+ses)/(3*len(subjects)))
@@ -37,24 +205,24 @@ def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./d
                 path_part = path + '/derivatives/sub-' + str(sub).zfill(2) +\
                             '/ses-0'+ str(ses) + '/sub-' + str(sub).zfill(2) +\
                             '_ses-0' + str(ses)
-                # load data
-                file_name = path_part + '_eeg-epo.fif'
-                data = mne.read_epochs(file_name, verbose='WARNING')
-                if channels: data = data.pick_channels(channels)
-                #data_collection = np.append(data_collection, data._data, axis=0)
+                data, events = _read_session_epochs(path_part, channels)
                 data_collection.append(data)
-                # load events
-                file_name =  path_part + '_events.dat'
-                events = np.load(file_name, allow_pickle=True)
-                #events_collection = np.append(events_collection, events, axis=0)
                 events_collection.append(events)
-            except:
-                pass
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                print(f'Warning: failed loading sub-{str(sub).zfill(2)} ses-0{ses}: {exc}')
+                continue
+
+    if not data_collection:
+        raise FileNotFoundError('No EEG sessions could be loaded from the provided dataset path.')
+
     data_collection = np.concatenate(data_collection, axis=0)
     events_collection = np.concatenate(events_collection, axis=0)
-    # filter out action interval
+
     if filter_action:
         data_collection = filter_interval(data_collection, [1, 3.5], 256)
+
     return data_collection, events_collection
 
 
@@ -268,4 +436,4 @@ def create_datasets(path, splits={'train':0.8, 'test':0.1, 'valid':0.1},
             args = [[], []],
             batch_size = batch_size
         )
-        tf.data.experimental.save(dataset, f'{path}/{key}')
+        dataset.save(f'{path}/{key}')

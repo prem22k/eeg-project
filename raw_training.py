@@ -3,7 +3,7 @@ import sys, getopt
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import utils as np_utils
+from tensorflow.keras.utils import to_categorical
 import scipy.stats
 import datetime
 import os
@@ -41,10 +41,19 @@ def pretrained_all_classes(subject, train_subjects=range(1,11)):
     """
     tf.keras.backend.clear_session()
     print(f"TESTING SUBJECT {subject}")
-    # load all subjects individually
-    subjects_data_collection = [dp.load_data(subjects=[s], filter_action=True) for s in range(1,11)]
+    # load all subjects individually (skip if not available)
+    subjects_data_collection = []
+    for s in range(1,11):
+        try:
+            data = dp.load_data(subjects=[s], filter_action=True)
+            subjects_data_collection.append(data)
+        except FileNotFoundError:
+            print(f"  Subject {s} data not found, skipping for pretraining")
+            subjects_data_collection.append(None)
     ###### INNER SPEECH SUBJECT DATA
     # collect subject's data and events
+    if subjects_data_collection[subject - 1] is None:
+        raise FileNotFoundError(f'Subject {subject} data could not be loaded.')
     subject_data_is, subject_events_is = subjects_data_collection[subject - 1]
     # save memory by converting from 64bit to 32bit floats
     subject_data_is = subject_data_is.astype(np.float32)
@@ -55,16 +64,20 @@ def pretrained_all_classes(subject, train_subjects=range(1,11)):
     # select the column containing directions (up, down, left, right)
     subject_events_is = subject_events_is[:, 1]
     # one-hot event data 
-    subject_events_is = np_utils.to_categorical(subject_events_is, 4)
+    subject_events_is = to_categorical(subject_events_is, 4)
     # zscore normalize the data
     subject_data_is = scipy.stats.zscore(subject_data_is, axis=2)
     # reshape
     subject_data_is = subject_data_is.reshape(*subject_data_is.shape, 1)
     
     ###### PRETRAIN DATA
-    # collect pretrain data
-    pretrain_data = [subjects_data_collection[i-1][0] for i in train_subjects if i != subject]
-    pretrain_events = [subjects_data_collection[i-1][1] for i in train_subjects if i != subject]
+    # collect pretrain data (skip subjects that couldn't be loaded)
+    pretrain_data = []
+    pretrain_events = []
+    for i in train_subjects:
+        if i != subject and subjects_data_collection[i-1] is not None:
+            pretrain_data.append(subjects_data_collection[i-1][0])
+            pretrain_events.append(subjects_data_collection[i-1][1])
     # append all non 'inner-speech'-conditions from subject 8
     for cond in ['pronounced speech', 'visualized condition']:
         data_sub_non_is, events_sub_non_is = dp.choose_condition(*subjects_data_collection[subject - 1], cond)
@@ -77,7 +90,7 @@ def pretrained_all_classes(subject, train_subjects=range(1,11)):
     # same preprocessing as for the subjects inner speech data commented above
     pretrain_data = pretrain_data.astype(np.float32)
     pretrain_events = pretrain_events[:, 1]
-    pretrain_events = np_utils.to_categorical(pretrain_events, num_classes=4)
+    pretrain_events = to_categorical(pretrain_events, num_classes=4)
     pretrain_data = scipy.stats.zscore(pretrain_data, axis=2)
     pretrain_data = pretrain_data.reshape(*pretrain_data.shape, 1)
     # create train and val tf.datasets
@@ -127,15 +140,14 @@ def no_pretrain_inner_speech(subject):
     # select the column containing directions (up, down, left, right)
     events = events[:, 1]
     # one-hot event data
-    events = np_utils.to_categorical(events, 4)
+    events = to_categorical(events, 4)
     # zscore normalize the data
     data = scipy.stats.zscore(data, axis=2)
     # reshape
     data = data.reshape(*data.shape, 1)
     print("Data Prepared.")
     ###### MODEL
-    gpus = tf.config.list_logical_devices('GPU')
-    mirrored_strategy = tf.distribute.MirroredStrategy(gpus)
+    mirrored_strategy = tf.distribute.MirroredStrategy()
     with mirrored_strategy.scope():
         # create EEGNet (source: https://github.com/vlawhern/arl-eegmodels)
         model = EEGNet(nb_classes=4, Chans=data.shape[1],

@@ -69,8 +69,7 @@ def kfold_training(data, labels, model_provided, batch_size, epochs, k=4):
         dataset_test = tf.data.Dataset.from_tensor_slices((X_test, Y_test)).with_options(options)
         dataset_test = dp.preprocessing_pipeline(dataset_test, batch_size=batch_size)
         tf.debugging.set_log_device_placement(True)
-        gpus = tf.config.list_logical_devices('GPU')
-        mirrored_strategy = tf.distribute.MirroredStrategy(gpus)
+        mirrored_strategy = tf.distribute.MirroredStrategy()
         
         with mirrored_strategy.scope():
             # load pretrained model
@@ -99,10 +98,9 @@ def pretrain_tester(pretrain_dataset, pretrain_val_dataset,
         ###### PRETRAIN MODEL
         print("Pretraining...")
         tf.debugging.set_log_device_placement(True)
-        gpus = tf.config.list_logical_devices('GPU')
         # tensorflows mirrored strategy adds support to do synchronous distributed
         # training on multiple GPU's
-        mirrored_strategy = tf.distribute.MirroredStrategy(gpus)
+        mirrored_strategy = tf.distribute.MirroredStrategy()
         with mirrored_strategy.scope():
             # create EEGNet (source: https://github.com/vlawhern/arl-eegmodels)
             model_pretrain = EEGNet(nb_classes=4, Chans=train_data.shape[1],
@@ -124,7 +122,7 @@ def pretrain_tester(pretrain_dataset, pretrain_val_dataset,
         print("FREEZE?")
         for freeze_index in freeze_layers:
             # function to get trainable parameters
-            trainable_params = lambda: np.sum([np.prod(v.get_shape()) for v in model_pretrain.trainable_weights])
+            trainable_params = lambda: np.sum([np.prod(v.shape) for v in model_pretrain.trainable_weights])
             print("trainable parameters before freezing:", trainable_params())
             model_pretrain.layers[freeze_index].trainable = False
             print("after:", trainable_params())
