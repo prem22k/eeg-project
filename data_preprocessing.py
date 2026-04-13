@@ -125,6 +125,7 @@ def _read_session_epochs(path_part, channels):
     epochs_file = f'{path_part}_eeg-epo.fif'
     raw_file = f'{path_part}_eeg.fif'
     bdf_file = f'{path_part}_eeg.bdf'
+    events_file = f'{path_part}_events.dat'
 
     if os.path.exists(epochs_file):
         epochs = mne.read_epochs(epochs_file, preload=True, verbose='ERROR')
@@ -147,24 +148,58 @@ def _read_session_epochs(path_part, channels):
             verbose='ERROR',
         )
     elif os.path.exists(bdf_file):
-        # Read BDF format (BioSemi Data Format)
-        raw = mne.io.read_raw_bdf(bdf_file, preload=True, verbose='ERROR')
+        # Memory-efficient BDF path: use external event table samples directly.
+        if not os.path.exists(events_file):
+            raise ValueError(f'BDF loading requires an event table: missing {events_file}')
+
+        events_table = np.asarray(np.load(events_file, allow_pickle=True))
+        if events_table.size == 0:
+            raise ValueError(f'Event file is empty: {events_file}')
+        if events_table.ndim == 1:
+            events_table = events_table.reshape(-1, 1)
+        if events_table.shape[1] < 4:
+            raise ValueError(f'Unsupported event table shape {events_table.shape} in {events_file}')
+
+        raw = mne.io.read_raw_bdf(bdf_file, preload=False, verbose='ERROR')
         if channels:
             raw.pick(channels)
-        events, event_id = mne.events_from_annotations(raw, verbose='ERROR')
-        if len(events) == 0:
-            raise ValueError(f'No annotation events found in {bdf_file}')
+        else:
+            raw.pick_types(eeg=True, stim=False, eog=False, misc=False)
 
-        epochs = mne.Epochs(
-            raw,
-            events=events,
-            event_id=event_id,
-            tmin=0.0,
-            tmax=4.5,
-            baseline=None,
-            preload=True,
-            verbose='ERROR',
-        )
+        sfreq = float(raw.info['sfreq'])
+        target_sfreq = 256.0
+        decim = max(1, int(round(sfreq / target_sfreq)))
+        window_samples = int(4.5 * sfreq)
+        target_len = int(4.5 * target_sfreq)
+
+        collected_data = []
+        collected_events = []
+        n_times = raw.n_times
+
+        for row in events_table:
+            sample = int(row[0])
+            start = sample
+            stop = sample + window_samples
+            if start < 0 or stop > n_times:
+                continue
+
+            segment = raw.get_data(start=start, stop=stop)
+            segment = segment[:, ::decim]
+            if segment.shape[1] < target_len:
+                continue
+            if segment.shape[1] > target_len:
+                segment = segment[:, :target_len]
+
+            collected_data.append(segment.astype(np.float32, copy=False))
+            collected_events.append(row[:4].astype(int))
+
+        if not collected_data:
+            raise ValueError(f'No valid event windows could be extracted from {bdf_file}')
+
+        data = np.stack(collected_data, axis=0)
+        events = np.stack(collected_events, axis=0)
+        _validate_event_table(events)
+        return data, events
     else:
         raise FileNotFoundError(f'No EEG file found for session prefix: {path_part}')
 
@@ -178,7 +213,7 @@ def _read_session_epochs(path_part, channels):
     return data, events
 
 
-def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./dataset'):
+def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./dataset', condition=None):
     """Load EEG-Data and Event-Data into a numpy array.
     
     :param subjects: array of subjects from which the sessions should be
@@ -192,6 +227,9 @@ def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./d
     :type filter_action: boolean, optional
     :param path: path to dataset-directory, defaults to './dataset'
     :type path: string, optional
+    :param condition: optional condition name to keep while loading each session,
+        one of {'inner speech', 'pronounced speech', 'visualized condition'}
+    :type condition: string, optional
     :return: eeg-data and event data in seperate arrays
     :rtype: tuple of two numpy arrays
     """
@@ -206,7 +244,11 @@ def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./d
                             '/ses-0'+ str(ses) + '/sub-' + str(sub).zfill(2) +\
                             '_ses-0' + str(ses)
                 data, events = _read_session_epochs(path_part, channels)
-                data_collection.append(data)
+                if condition is not None:
+                    data, events = choose_condition(data, events, condition)
+                if filter_action:
+                    data = filter_interval(data, [1, 3.5], 256)
+                data_collection.append(data.astype(np.float32, copy=False))
                 events_collection.append(events)
             except FileNotFoundError:
                 continue
@@ -219,9 +261,6 @@ def load_data(subjects=range(1,11), channels=None, filter_action=True, path='./d
 
     data_collection = np.concatenate(data_collection, axis=0)
     events_collection = np.concatenate(events_collection, axis=0)
-
-    if filter_action:
-        data_collection = filter_interval(data_collection, [1, 3.5], 256)
 
     return data_collection, events_collection
 

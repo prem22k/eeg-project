@@ -130,13 +130,16 @@ def no_pretrain_inner_speech(subject):
     :rtype: list of dictonaries
     """
     ###### DATA
-    data, events = dp.load_data(subjects=[subject], filter_action=True)
+    data, events = dp.load_data(
+        subjects=[subject],
+        filter_action=True,
+        condition='inner speech',
+    )
     # shuffle data and labels
     data, events = sklearn.utils.shuffle(data, events)
     # save memory by converting from 64bit to 32bit floats
     data = data.astype(np.float32)
-    # filter out only the inner speech condition
-    data, events = dp.choose_condition(data, events, 'inner speech')
+    # Data is already filtered to the inner speech condition at load time.
     # select the column containing directions (up, down, left, right)
     events = events[:, 1]
     # one-hot event data
@@ -159,7 +162,8 @@ def no_pretrain_inner_speech(subject):
     # compile model
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
     model.build(input_shape=(BATCH_SIZE, *data.shape[1:]))
-    path = './models/saved_models/no_pretrain_inner_speech'
+    path = './models/saved_models/no_pretrain_inner_speech.keras'
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     model.save(path)
     del model
     ###### KFOLD TRAINING

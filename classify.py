@@ -3,6 +3,7 @@ import data_preprocessing as dp
 import numpy as np
 import tensorflow as tf
 import sklearn
+import os
 
 
 def augment_pipe(data, events, noise):
@@ -118,7 +119,8 @@ def pretrain_tester(pretrain_dataset, pretrain_val_dataset,
         # append pretrain history to accumulator
         pretrain_history_accumulator.append(pretrain_history.history)
         # save pretrained model so it can be used for transfer learning
-        path = './models/saved_models/pretrained_model01'
+        path = './models/saved_models/pretrained_model01.keras'
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         print("FREEZE?")
         for freeze_index in freeze_layers:
             # function to get trainable parameters
