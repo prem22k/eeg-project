@@ -1,0 +1,6 @@
+
+Subject: 1
+Epochs: 1,                    Pretrain Epochs: 35,                    Batch Size: 4, N Checks: 1,                    Dropout: 0.4
+                    Pretrain History: []
+                    Subject History: [{'accuracy': [0.4513567090034485], 'loss': [1.2185425758361816], 'val_accuracy': [0.544731616973877], 'val_loss': [1.0836526155471802]}, {'accuracy': [0.44966888427734375], 'loss': [1.2208261489868164], 'val_accuracy': [0.5515872836112976], 'val_loss': [1.0601918697357178]}, {'accuracy': [0.4467240273952484], 'loss': [1.2339173555374146], 'val_accuracy': [0.5526838898658752], 'val_loss': [1.0917620658874512]}, {'accuracy': [0.42847681045532227], 'loss': [1.2231858968734741], 'val_accuracy': [0.5515872836112976], 'val_loss': [1.069346308708191]}]
+
