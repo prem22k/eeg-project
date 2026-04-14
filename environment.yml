@@ -2,7 +2,7 @@ name: inner_speech
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python>=3.10,<3.13
   - numpy=1.26
   - scipy=1.13
   - pandas=2.2
