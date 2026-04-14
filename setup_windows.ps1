@@ -15,11 +15,11 @@ Write-Host 'Done.' -ForegroundColor Green
 Write-Host ''
 Write-Host '[2/4] Attempting to create from environment.yml...' -ForegroundColor Yellow
 try {
-    conda env create -f environment.yml -y
+    conda env create -f environment.yml --solver libmamba --override-channels -c conda-forge -y
 } catch {
     Write-Host 'environment.yml method failed. Trying direct package install...' -ForegroundColor Red
     Write-Host '[2/4] (Retry) Installing with direct command...' -ForegroundColor Yellow
-    conda create -n inner_speech -c conda-forge python=3.10 tensorflow=2.18 mne=1.8 numpy=1.26 scipy=1.13 scikit-learn=1.6 pandas=2.2 matplotlib=3.9 tensorflow-datasets=4.9 -y
+    conda create -n inner_speech --solver libmamba --override-channels -c conda-forge python=3.10 tensorflow=2.18 mne=1.8 numpy=1.26 scipy=1.13 scikit-learn=1.6 pandas=2.2 matplotlib=3.9 tensorflow-datasets=4.9 -y
 }
 
 Write-Host ''
