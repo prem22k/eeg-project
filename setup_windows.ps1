@@ -1,42 +1,70 @@
 # Windows Environment Setup Script for inner_speech
-# Run in PowerShell as Administrator if possible
+# Robust conda-only setup for win-64 with retry and verification.
+# Run in PowerShell, preferably as Administrator.
 
 $ErrorActionPreference = 'Stop'
+$EnvName = 'inner_speech'
 
-Write-Host '================================' -ForegroundColor Cyan
-Write-Host 'Inner Speech Conda Setup' -ForegroundColor Cyan
-Write-Host '================================' -ForegroundColor Cyan
+function Invoke-Step {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Script,
+        [int]$Retries = 2
+    )
 
-Write-Host ''
-Write-Host '[1/4] Cleaning up any failed environments...' -ForegroundColor Yellow
-conda env remove -n inner_speech -y 2>$null | Out-Null
-Write-Host 'Done.' -ForegroundColor Green
-
-Write-Host ''
-Write-Host '[2/4] Creating lean base environment (fast path)...' -ForegroundColor Yellow
-conda create -n inner_speech --solver libmamba -c conda-forge python=3.10 pip -y
-
-Write-Host '[2/4] Installing required packages with pip...' -ForegroundColor Yellow
-conda run -n inner_speech python -m pip install --upgrade pip
-conda run -n inner_speech python -m pip install numpy==1.26.4 scipy==1.13.1 pandas==2.2.3 scikit-learn==1.6.1 matplotlib==3.9.2 tensorflow==2.18.0 mne==1.8.0 tensorflow-datasets==4.9.6
-
-Write-Host ''
-Write-Host '[3/4] Verifying environment...' -ForegroundColor Yellow
-$envExists = conda info --envs | Select-String 'inner_speech'
-if (-not $envExists) {
-    Write-Host 'Environment not found. Check disk space and RAM.' -ForegroundColor Red
-    exit 1
+    for ($i = 1; $i -le $Retries; $i++) {
+        try {
+            Write-Host "[$Name] Attempt $i/$Retries" -ForegroundColor Yellow
+            & $Script
+            Write-Host "[$Name] Success" -ForegroundColor Green
+            return
+        } catch {
+            Write-Host "[$Name] Failed: $($_.Exception.Message)" -ForegroundColor Red
+            if ($i -eq $Retries) {
+                throw
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
 }
-Write-Host 'Environment found.' -ForegroundColor Green
+
+Write-Host '================================' -ForegroundColor Cyan
+Write-Host 'Inner Speech Conda Setup (Windows)' -ForegroundColor Cyan
+Write-Host '================================' -ForegroundColor Cyan
+
+Invoke-Step -Name 'Cleanup old environment' -Retries 1 -Script {
+    conda deactivate 2>$null
+    conda deactivate 2>$null
+    conda env remove -n $EnvName -y 2>$null | Out-Null
+}
+
+Invoke-Step -Name 'Conda cache cleanup' -Retries 1 -Script {
+    conda clean --all -y
+}
+
+Invoke-Step -Name 'Set libmamba solver' -Retries 1 -Script {
+    conda config --set solver libmamba
+}
+
+Invoke-Step -Name 'Create TensorFlow base (defaults, py310)' -Retries 3 -Script {
+    conda create -n $EnvName --override-channels -c defaults --strict-channel-priority -y `
+        python=3.10 tensorflow-cpu=2.18.1 tensorflow-datasets=4.9.9
+}
+
+Invoke-Step -Name 'Install scientific stack (conda-forge, frozen TF stack)' -Retries 3 -Script {
+    conda run -n $EnvName conda install -y -c conda-forge --strict-channel-priority --freeze-installed `
+        numpy=1.26 scipy=1.13 pandas=2.2 scikit-learn=1.6 matplotlib=3.9 mne=1.8
+}
 
 Write-Host ''
-Write-Host '[4/4] Testing imports...' -ForegroundColor Yellow
-conda run -n inner_speech python -c "import tensorflow as tf; print('TensorFlow ' + tf.__version__ + ' OK')"
-conda run -n inner_speech python -c "import mne; print('MNE ' + mne.__version__ + ' OK')"
-conda run -n inner_speech python -c "import numpy as np; print('NumPy ' + np.__version__ + ' OK')"
+Write-Host '[Verification] Import checks...' -ForegroundColor Cyan
+conda run -n $EnvName python -c "import sys; print(sys.version)"
+conda run -n $EnvName python -c "import tensorflow as tf; print('TensorFlow ' + tf.__version__ + ' OK')"
+conda run -n $EnvName python -c "import tensorflow_datasets as tfds; print('TFDS ' + tfds.__version__ + ' OK')"
+conda run -n $EnvName python -c "import numpy, scipy, pandas, sklearn, matplotlib, mne; print('Core scientific imports OK')"
 
 Write-Host ''
 Write-Host '================================' -ForegroundColor Green
 Write-Host 'Setup Complete!' -ForegroundColor Green
 Write-Host '================================' -ForegroundColor Green
-Write-Host 'To use: conda activate inner_speech' -ForegroundColor Cyan
+Write-Host 'Use with: conda activate inner_speech' -ForegroundColor Cyan

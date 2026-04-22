@@ -1,26 +1,40 @@
 # Windows Conda Environment Diagnostic Script
-# Run this in PowerShell after conda finishes
+# Collects deterministic machine + conda details for troubleshooting.
 
-Write-Host "=== Conda Environment Check ===" -ForegroundColor Cyan
+$ErrorActionPreference = 'Continue'
+$Report = Join-Path $PWD 'windows_env_diagnostics.txt'
+
+Start-Transcript -Path $Report -Force | Out-Null
+
+Write-Host "=== System Info ===" -ForegroundColor Cyan
+systeminfo | Select-Object -First 25
+
+Write-Host "`n=== Conda Version and Config ===" -ForegroundColor Cyan
+conda --version
+conda info
+conda config --show-sources
+
+Write-Host "`n=== Active Environments ===" -ForegroundColor Cyan
 conda info --envs
 
-Write-Host "`n=== Attempting to Activate Environment ===" -ForegroundColor Cyan
-conda activate inner_speech
+Write-Host "`n=== inner_speech Package Snapshot ===" -ForegroundColor Cyan
+conda list -n inner_speech
 
-Write-Host "`n=== Python Version ===" -ForegroundColor Cyan
-python --version
+Write-Host "`n=== Key Package Filter ===" -ForegroundColor Cyan
+conda list -n inner_speech | Select-String 'python|tensorflow|tensorflow-datasets|numpy|scipy|pandas|scikit-learn|matplotlib|mne'
 
-Write-Host "`n=== TensorFlow Import Test ===" -ForegroundColor Cyan
-python -c "import tensorflow; print(f'TensorFlow {tensorflow.__version__} OK')" 2>&1
+Write-Host "`n=== Python Import Check (inner_speech) ===" -ForegroundColor Cyan
+conda run -n inner_speech python -c "import sys; print(sys.version)"
+conda run -n inner_speech python -c "import tensorflow as tf; print('TF', tf.__version__)"
+conda run -n inner_speech python -c "import tensorflow_datasets as tfds; print('TFDS', tfds.__version__)"
+conda run -n inner_speech python -c "import numpy, scipy, pandas, sklearn, matplotlib, mne; print('Core imports OK')"
 
-Write-Host "`n=== MNE Import Test ===" -ForegroundColor Cyan
-python -c "import mne; print(f'MNE {mne.__version__} OK')" 2>&1
+Write-Host "`n=== Channel Availability Check ===" -ForegroundColor Cyan
+conda search -c defaults "tensorflow-cpu=2.18.1"
+conda search -c defaults "tensorflow-datasets=4.9.9"
+conda search -c conda-forge "mne=1.8"
 
-Write-Host "`n=== NumPy Import Test ===" -ForegroundColor Cyan
-python -c "import numpy; print(f'NumPy {numpy.__version__} OK')" 2>&1
-
-Write-Host "`n=== Conda List (installed packages) ===" -ForegroundColor Cyan
-conda list | grep -E "tensorflow|mne|numpy|scipy"
+Stop-Transcript | Out-Null
 
 Write-Host "`n=== Diagnosis Complete ===" -ForegroundColor Green
-Write-Host "Copy the entire output above and send to debugging." -ForegroundColor Yellow
+Write-Host "Report file created: $Report" -ForegroundColor Yellow
